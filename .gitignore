@@ -1,0 +1,37 @@
+# Audio / video source files
+*.mp3
+*.m4a
+*.wav
+*.mp4
+*.mov
+
+# Whisper outputs
+*.srt
+*.vtt
+*.srt.txt
+*.vtt.txt
+*.mp3.txt
+*.wav.txt
+*.txt.clean
+
+# Diarization outputs
+*.rttm
+*.diarization.txt
+*.jsonl
+
+# Local data directories
+data/
+output/
+tmp/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Secrets
+.env
+*.token
