@@ -4,7 +4,21 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import torch
 from pyannote.audio import Pipeline
+
+
+def resolve_device(name: str) -> torch.device:
+    if name != "auto":
+        return torch.device(name)
+
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+
+    return torch.device("cpu")
 
 
 def main() -> None:
@@ -29,6 +43,12 @@ def main() -> None:
         default=2,
         help="Expected number of speakers",
     )
+    parser.add_argument(
+        "--device",
+        choices=["auto", "cuda", "mps", "cpu"],
+        default="auto",
+        help="Device to run the pipeline on (auto detects CUDA, then MPS, then CPU)",
+    )
     args = parser.parse_args()
 
     audio_file = args.audio_file.expanduser()
@@ -41,6 +61,10 @@ def main() -> None:
         output_file = args.output.expanduser()
 
     pipeline = Pipeline.from_pretrained(args.model)
+
+    device = resolve_device(args.device)
+    pipeline.to(device)
+    print(f"Using device: {device}")
 
     diarization_output = pipeline(
         str(audio_file),

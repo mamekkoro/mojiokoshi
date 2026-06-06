@@ -15,6 +15,10 @@
 3. pyannote.audio で話者分離
 4. Whisper 出力と話者分離結果を統合
 
+上記 1〜4 は `scripts/run_pipeline.py` で1コマンドにまとめて実行できる
+（長尺音声向けのチャンク分割・再開対応つき）。詳細は
+[ワンストップ実行（推奨）: `run_pipeline.py`](#one-stop-pipeline-recommended-run_pipelinepy) を参照。
+
 ---
 
 ## Usage
@@ -125,7 +129,106 @@ pyannote/speaker-diarization-3.1
 pyannote/segmentation-3.0
 ```
 
-## Workflow for one MP3 file
+## One-stop pipeline (recommended): `run_pipeline.py`
+
+For long recordings (1〜3 hours), running the four steps by hand is slow and fragile.
+In particular, `diarize_pyannote.py` can take a very long time when it runs on the CPU,
+and the repeating progress output can look like it has frozen or is stuck in an
+infinite loop.
+
+`scripts/run_pipeline.py` runs the whole pipeline
+(convert → chunk → transcribe → diarize → merge) with a single command. It
+automatically uses the GPU (CUDA, or Apple Silicon MPS) for diarization, splits long
+audio into overlapping chunks so memory use and run time stay manageable, and is safe
+to interrupt and re-run.
+
+```bash
+cd /Volumes/macomini-data/eUsers/ryo/dev/git/mojiokoshi
+source .venv/bin/activate
+
+python scripts/run_pipeline.py \
+  ~/pclouddrv/hosh/houshasenka/20260529/kaiwa20260601.mp3
+```
+
+This creates, under `<input_dir>/pipeline/<basename>/`:
+
+```text
+kaiwa20260601_16k_mono.wav             # converted audio (step 1)
+chunks/chunk_0000.wav (.srt/.rttm/...) # per-chunk intermediate files
+kaiwa20260601_full.srt                 # stitched transcript for the whole recording
+kaiwa20260601_full.rttm                # stitched diarization for the whole recording
+kaiwa20260601_merged.txt               # neutral merged transcript (SPEAKER_00 / SPEAKER_01)
+```
+
+### Why chunking?
+
+Long audio is split into overlapping chunks (default: 20 minutes each, with 60 seconds
+of overlap). Each chunk is transcribed and diarized independently and the results are
+then stitched back into a single transcript and a single diarization for the whole
+recording:
+
+- each chunk is small enough that transcription and diarization finish in a reasonable
+  time and without running out of memory
+- pyannote numbers speakers independently within each chunk (chunk A's `SPEAKER_00` is
+  not necessarily the same person as chunk B's `SPEAKER_00`); `run_pipeline.py`
+  reconciles these per-chunk labels into consistent global speaker labels by matching
+  segments that overlap in time across the chunk boundary
+- subtitles and diarization segments are split at the midpoint of each overlap region,
+  so the stitched result has no gaps and no duplicated lines
+
+Adjust the chunk size or overlap if needed:
+
+```bash
+python scripts/run_pipeline.py INPUT.mp3 \
+  --chunk-minutes 15 \
+  --overlap-seconds 45
+```
+
+### Resuming after an interruption
+
+Every step checks whether its output file already exists and skips it if so. If the
+process is interrupted (Ctrl-C, closed terminal, out of memory, ...), just run the
+exact same command again — chunks and steps that already finished are skipped, and only
+the remaining work is done.
+
+### Assigning speaker names
+
+`run_pipeline.py` deliberately stops at a neutral merged transcript
+(`..._merged.txt`, using `SPEAKER_00` / `SPEAKER_01` labels). Check it, decide who is
+who, then run `merge_srt_rttm.py` on the stitched `..._full.srt` / `..._full.rttm` —
+exactly as in [step 5 of the manual workflow](#5-assign-speaker-names) below — to
+produce the final transcript with real names. This step is fast and does not require
+rerunning transcription or diarization.
+
+```bash
+python scripts/merge_srt_rttm.py \
+  --srt    .../pipeline/kaiwa20260601/kaiwa20260601_full.srt \
+  --rttm   .../pipeline/kaiwa20260601/kaiwa20260601_full.rttm \
+  --output .../pipeline/kaiwa20260601/kaiwa20260601_MK.txt \
+  --speaker-00 M職員 \
+  --speaker-01 K職員
+```
+
+### Other options
+
+```text
+--output-dir DIR        Output directory (default: <input_dir>/pipeline/<basename>)
+--chunk-minutes N       Chunk length in minutes (default: 20)
+--overlap-seconds N     Overlap between consecutive chunks, in seconds (default: 60)
+--num-speakers N        Expected number of speakers (default: 2)
+--whisper-model PATH    ggml model path (default: $WHISPER_MODEL or ~/ssd/models/whisper/ggml-large-v3-turbo.bin)
+--diarization-model ID  Hugging Face pyannote pipeline name (default: pyannote/speaker-diarization-3.1)
+--device {auto,cuda,mps,cpu}
+                        Device for diarization (default: auto — detects CUDA, then MPS, then CPU)
+```
+
+---
+
+## Manual step-by-step workflow (reference / troubleshooting)
+
+The steps below are exactly what `run_pipeline.py` automates. They remain useful for
+re-running a single step, debugging a specific stage, or processing a file outside the
+one-stop flow.
 
 Example input:
 
@@ -258,6 +361,10 @@ python scripts/merge_srt_rttm.py \
 ```
 
 ## Full example
+
+This is the manual equivalent of `python scripts/run_pipeline.py INPUT.mp3` (steps 1-4
+chained together). For long recordings, prefer the
+[one-stop pipeline](#one-stop-pipeline-recommended-run_pipelinepy) instead.
 
 ```bash
 cd /Volumes/macomini-data/eUsers/ryo/dev/git/mojiokoshi
