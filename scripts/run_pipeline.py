@@ -22,7 +22,6 @@ from transcript_lib import (
 )
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_WHISPER_MODEL = Path("~/ssd/models/whisper/ggml-large-v3-turbo.bin")
 
 
 @dataclass(frozen=True)
@@ -57,7 +56,12 @@ def resolve_whisper_model(explicit: Path | None) -> Path:
     if env_value:
         return Path(env_value).expanduser()
 
-    return DEFAULT_WHISPER_MODEL.expanduser()
+    raise SystemExit(
+        "Error: Whisper model not specified.\n"
+        "Set the WHISPER_MODEL environment variable to the path of a ggml model file:\n"
+        "  export WHISPER_MODEL=~/models/whisper/ggml-large-v3-turbo.bin\n"
+        "Or pass --whisper-model PATH directly."
+    )
 
 
 def get_audio_duration(path: Path) -> float:
@@ -326,7 +330,7 @@ def main() -> None:
         "--whisper-model",
         type=Path,
         default=None,
-        help="Path to a whisper.cpp ggml model (default: $WHISPER_MODEL or ~/ssd/models/whisper/ggml-large-v3-turbo.bin)",
+        help="Path to a whisper.cpp ggml model (default: $WHISPER_MODEL; required if not set)",
     )
     parser.add_argument(
         "--diarization-model",

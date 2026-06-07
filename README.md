@@ -1,182 +1,139 @@
-# houshasenka-transcript
-文字起こしの練習用のレポジトリ
+# mojiokoshi
+
+音声ファイルの文字起こし・話者分離パイプライン。
 
 ## 方針
 
 - 音声ファイル本体は Git 管理しない。
-- Git 管理するのは、スクリプト、設定、README、作業メモのみ。
+- Git 管理するのは、スクリプト、設定、README のみ。
 - 文字起こし結果や話者分離結果も原則 Git 管理しない。
 - 最終的な匿名化済みテキストだけ、必要に応じて手動で管理対象にする。
 
-## 想定する処理
+## 処理フロー
 
-1. ffmpeg で音声を分割・整音
-2. whisper.cpp で文字起こし
-3. pyannote.audio で話者分離
-4. Whisper 出力と話者分離結果を統合
+```
+MP3 / 音声ファイル
+     ↓ 1. ffmpeg で変換
+  16kHz モノラル WAV
+     ↓ 2. whisper.cpp で文字起こし
+  .srt（字幕ファイル）
+     ↓ 3. pyannote.audio で話者分離
+  .rttm（話者タイムライン）
+     ↓ 4. SRT + RTTM を統合
+  merged.txt（誰が何を言ったかのテキスト）
+```
 
-上記 1〜4 は `scripts/run_pipeline.py` で1コマンドにまとめて実行できる
-（長尺音声向けのチャンク分割・再開対応つき）。詳細は
-[ワンストップ実行（推奨）: `run_pipeline.py`](#one-stop-pipeline-recommended-run_pipelinepy) を参照。
+上記 1〜4 は `scripts/run_pipeline.py` で1コマンドにまとめて実行できる（長尺音声向けのチャンク分割・再開対応つき）。
 
 ---
 
-## Usage
+## セットアップ
 
-This repository manages scripts for local transcription and speaker diarization.
+### 1. 必要なツール
 
-Audio files, generated WAV files, Whisper outputs, RTTM files, and merged transcripts are not tracked by Git.
-
-## Directory assumptions
-
-The working audio files are stored outside this repository.
-
-Example:
-
-```text
-~/pclouddrv/hosh/houshasenka
-~/pclouddrv/hosh/houshasenka/20260529
-```
-
-The symbolic link `~/pclouddrv` points to pCloud Drive.
-
-## Important path note
-
-If the home/data directory path changes, for example:
-
-```text
-/Volumes/macomini-data/Users
-```
-
-to:
-
-```text
-/Volumes/macomini-data/eUsers
-```
-
-the existing `.venv` may contain stale absolute paths.
-
-In that case, recreate the virtual environment instead of trying to repair it.
-
-```bash
-cd /Volumes/macomini-data/eUsers/ryo/dev/git/mojiokoshi
-
-deactivate 2>/dev/null || true
-rm -rf .venv
-
-uv venv --python 3.12
-source .venv/bin/activate
-uv pip install pyannote.audio huggingface-hub
-```
-
-Confirm:
-
-```bash
-which python
-python --version
-echo "$VIRTUAL_ENV"
-hf auth whoami
-```
-
-Expected `python` path:
-
-```text
-/Volumes/macomini-data/eUsers/ryo/dev/git/mojiokoshi/.venv/bin/python
-```
-
-## Initial setup
-
-Install required command-line tools.
+**macOS:**
 
 ```bash
 brew install ffmpeg uv whisper-cpp
 ```
 
-Prepare Whisper model.
-
-Example: `large-v3-turbo`.
+**Linux (Ubuntu/Debian):**
 
 ```bash
-mkdir -p ~/ssd/models/whisper
-
-curl -L -o ~/ssd/models/whisper/ggml-large-v3-turbo.bin \
-https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin
+sudo apt install ffmpeg
+# uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# whisper-cpp: 公式リポジトリからビルド、またはディストリのパッケージマネージャから
 ```
 
-Create Python environment.
+### 2. Whisper モデルの準備
+
+任意のディレクトリにモデルをダウンロードする。
 
 ```bash
-cd /Volumes/macomini-data/eUsers/ryo/dev/git/mojiokoshi
+mkdir -p ~/models/whisper
+curl -L -o ~/models/whisper/ggml-large-v3-turbo.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin
+```
 
-uv venv --python 3.12
+シェルのプロファイル（`~/.zshrc` や `~/.bashrc`）に以下を追記する。
+
+```bash
+export WHISPER_MODEL=~/models/whisper/ggml-large-v3-turbo.bin
+```
+
+追記後は `source ~/.zshrc`（または該当ファイル）で反映する。
+
+> **注意:** `WHISPER_MODEL` が設定されていない場合、スクリプトはエラーを出力して終了する。
+> `--whisper-model PATH` フラグで都度指定することもできる。
+
+### 3. Python 環境の構築
+
+```bash
+cd mojiokoshi   # クローンしたディレクトリ
+
+uv sync
 source .venv/bin/activate
-uv pip install pyannote.audio huggingface-hub
 ```
 
-Login to Hugging Face.
+`uv sync` は `pyproject.toml` と `uv.lock` をもとに `.venv` を作成し、依存パッケージを一括インストールする。
+
+> **.venv を作り直す場合:**
+> パスが変わったなど `.venv` が壊れた場合は削除して再作成する。
+> ```bash
+> deactivate 2>/dev/null || true
+> rm -rf .venv
+> uv sync
+> ```
+
+### 4. HuggingFace 認証
 
 ```bash
 hf auth login
 hf auth whoami
 ```
 
-pyannote models may require accepting the model terms on Hugging Face.
+pyannote のモデルは HuggingFace のライセンスへの同意が必要（初回のみ）。
 
-Required or likely required models:
+必要なモデル:
 
-```text
-pyannote/speaker-diarization-3.1
-pyannote/segmentation-3.0
-```
+- `pyannote/speaker-diarization-3.1`
+- `pyannote/segmentation-3.0`
 
-## One-stop pipeline (recommended): `run_pipeline.py`
+---
 
-For long recordings (1〜3 hours), running the four steps by hand is slow and fragile.
-In particular, `diarize_pyannote.py` can take a very long time when it runs on the CPU,
-and the repeating progress output can look like it has frozen or is stuck in an
-infinite loop.
+## ワンストップ実行（推奨）: `run_pipeline.py`
 
-`scripts/run_pipeline.py` runs the whole pipeline
-(convert → chunk → transcribe → diarize → merge) with a single command. It
-automatically uses the GPU (CUDA, or Apple Silicon MPS) for diarization, splits long
-audio into overlapping chunks so memory use and run time stay manageable, and is safe
-to interrupt and re-run.
+長時間の録音（1〜3時間）を変換・分割・文字起こし・話者分離・統合まで一括処理する。
 
 ```bash
-cd /Volumes/macomini-data/eUsers/ryo/dev/git/mojiokoshi
 source .venv/bin/activate
 
-python scripts/run_pipeline.py \
-  ~/pclouddrv/hosh/houshasenka/20260529/kaiwa20260601.mp3
+python scripts/run_pipeline.py INPUT.mp3
 ```
 
-This creates, under `<input_dir>/pipeline/<basename>/`:
+出力は `<入力ファイルのディレクトリ>/pipeline/<ファイル名なし拡張子>/` に作成される。
 
 ```text
-kaiwa20260601_16k_mono.wav             # converted audio (step 1)
-chunks/chunk_0000.wav (.srt/.rttm/...) # per-chunk intermediate files
-kaiwa20260601_full.srt                 # stitched transcript for the whole recording
-kaiwa20260601_full.rttm                # stitched diarization for the whole recording
-kaiwa20260601_merged.txt               # neutral merged transcript (SPEAKER_00 / SPEAKER_01)
+pipeline/kaiwa20260601/
+  kaiwa20260601_16k_mono.wav              # 変換済み音声（ステップ1）
+  chunks/chunk_0000.wav (.srt/.rttm/...)  # チャンクごとの中間ファイル
+  kaiwa20260601_full.srt                  # 全体の文字起こし（SRT）
+  kaiwa20260601_full.rttm                 # 全体の話者分離（RTTM）
+  kaiwa20260601_merged.txt                # 中立な統合テキスト（SPEAKER_00 / SPEAKER_01）
 ```
 
-### Why chunking?
+### なぜチャンク分割するのか
 
-Long audio is split into overlapping chunks (default: 20 minutes each, with 60 seconds
-of overlap). Each chunk is transcribed and diarized independently and the results are
-then stitched back into a single transcript and a single diarization for the whole
-recording:
+長時間の音声をそのまま処理するとメモリ不足や処理時間の問題が生じる。デフォルトでは20分ごとに60秒のオーバーラップを持つチャンクに分割し、各チャンクを独立して文字起こし・話者分離する。
 
-- each chunk is small enough that transcription and diarization finish in a reasonable
-  time and without running out of memory
-- pyannote numbers speakers independently within each chunk (chunk A's `SPEAKER_00` is
-  not necessarily the same person as chunk B's `SPEAKER_00`); `run_pipeline.py`
-  reconciles these per-chunk labels into consistent global speaker labels by matching
-  segments that overlap in time across the chunk boundary
-- subtitles and diarization segments are split at the midpoint of each overlap region,
-  so the stitched result has no gaps and no duplicated lines
+チャンクをまたぐ話者ラベル（`SPEAKER_00` など）はオーバーラップ区間の一致度で照合し、全体で一貫したラベルに統一される。
 
-Adjust the chunk size or overlap if needed:
+### 中断後の再開
+
+各ステップは出力ファイルが既に存在する場合にスキップする。同じコマンドを再実行すれば完了済みのステップは飛ばされ、残りの処理だけが実行される。
+
+### チャンクサイズの変更
 
 ```bash
 python scripts/run_pipeline.py INPUT.mp3 \
@@ -184,256 +141,122 @@ python scripts/run_pipeline.py INPUT.mp3 \
   --overlap-seconds 45
 ```
 
-### Resuming after an interruption
+### 話者名の割り当て
 
-Every step checks whether its output file already exists and skips it if so. If the
-process is interrupted (Ctrl-C, closed terminal, out of memory, ...), just run the
-exact same command again — chunks and steps that already finished are skipped, and only
-the remaining work is done.
-
-### Assigning speaker names
-
-`run_pipeline.py` deliberately stops at a neutral merged transcript
-(`..._merged.txt`, using `SPEAKER_00` / `SPEAKER_01` labels). Check it, decide who is
-who, then run `merge_srt_rttm.py` on the stitched `..._full.srt` / `..._full.rttm` —
-exactly as in [step 5 of the manual workflow](#5-assign-speaker-names) below — to
-produce the final transcript with real names. This step is fast and does not require
-rerunning transcription or diarization.
+`run_pipeline.py` が生成する `..._merged.txt` は中立なラベル（`SPEAKER_00` / `SPEAKER_01`）を使う。内容を確認して誰がどのラベルかを判断したあと、`merge_srt_rttm.py` で実名を割り当てる（文字起こしや話者分離の再実行は不要）。
 
 ```bash
 python scripts/merge_srt_rttm.py \
-  --srt    .../pipeline/kaiwa20260601/kaiwa20260601_full.srt \
-  --rttm   .../pipeline/kaiwa20260601/kaiwa20260601_full.rttm \
-  --output .../pipeline/kaiwa20260601/kaiwa20260601_MK.txt \
+  --srt   .../pipeline/kaiwa20260601/kaiwa20260601_full.srt \
+  --rttm  .../pipeline/kaiwa20260601/kaiwa20260601_full.rttm \
+  --output .../pipeline/kaiwa20260601/kaiwa20260601_named.txt \
   --speaker-00 M職員 \
   --speaker-01 K職員
 ```
 
-### Other options
+### オプション一覧
 
 ```text
---output-dir DIR        Output directory (default: <input_dir>/pipeline/<basename>)
---chunk-minutes N       Chunk length in minutes (default: 20)
---overlap-seconds N     Overlap between consecutive chunks, in seconds (default: 60)
---num-speakers N        Expected number of speakers (default: 2)
---whisper-model PATH    ggml model path (default: $WHISPER_MODEL or ~/ssd/models/whisper/ggml-large-v3-turbo.bin)
---diarization-model ID  Hugging Face pyannote pipeline name (default: pyannote/speaker-diarization-3.1)
+--output-dir DIR        出力ディレクトリ（デフォルト: <入力ディレクトリ>/pipeline/<ファイル名>）
+--chunk-minutes N       チャンクの長さ（分）（デフォルト: 20）
+--overlap-seconds N     チャンク間のオーバーラップ（秒）（デフォルト: 60）
+--num-speakers N        想定話者数（デフォルト: 2）
+--whisper-model PATH    ggml モデルのパス（デフォルト: $WHISPER_MODEL）
+--diarization-model ID  HuggingFace の pyannote パイプライン名（デフォルト: pyannote/speaker-diarization-3.1）
 --device {auto,cuda,mps,cpu}
-                        Device for diarization (default: auto — detects CUDA, then MPS, then CPU)
+                        話者分離に使うデバイス（デフォルト: auto — CUDA → MPS → CPU の順で自動検出）
 ```
 
 ---
 
-## Manual step-by-step workflow (reference / troubleshooting)
+## 手動ステップごとの実行（参照用・デバッグ用）
 
-The steps below are exactly what `run_pipeline.py` automates. They remain useful for
-re-running a single step, debugging a specific stage, or processing a file outside the
-one-stop flow.
+`run_pipeline.py` が自動化している各ステップを個別に実行する場合の手順。
 
-Example input:
-
-```text
-~/pclouddrv/hosh/houshasenka/20260529/kaiwa20260601.mp3
-```
-
-### 1. Convert MP3 to 16 kHz mono WAV
+### 1. MP3 → 16kHz モノラル WAV
 
 ```bash
-cd /Volumes/macomini-data/eUsers/ryo/dev/git/mojiokoshi
-
-./scripts/prepare_audio.sh \
-  ~/pclouddrv/hosh/houshasenka/20260529/kaiwa20260601.mp3
+./scripts/prepare_audio.sh INPUT.mp3
 ```
 
-This creates:
+出力: `<入力ディレクトリ>/wav/<ファイル名>_16k_mono.wav`
 
-```text
-~/pclouddrv/hosh/houshasenka/20260529/wav/kaiwa20260601_16k_mono.wav
-```
-
-The conversion uses:
+第2引数で出力先を指定することもできる:
 
 ```bash
-ffmpeg -y \
-  -i input.mp3 \
-  -ac 1 \
-  -ar 16000 \
-  -c:a pcm_s16le \
-  output_16k_mono.wav
+./scripts/prepare_audio.sh INPUT.mp3 OUTPUT.wav
 ```
 
-This format is safer for Whisper and pyannote than feeding MP3 directly.
-
-### 2. Run Whisper transcription
+### 2. Whisper 文字起こし
 
 ```bash
-./scripts/transcribe_whisper.sh \
-  ~/pclouddrv/hosh/houshasenka/20260529/wav/kaiwa20260601_16k_mono.wav
+./scripts/transcribe_whisper.sh OUTPUT_16k_mono.wav
 ```
 
-This creates files such as:
+出力: `.wav.txt` / `.wav.srt` / `.wav.vtt`
 
-```text
-kaiwa20260601_16k_mono.wav.txt
-kaiwa20260601_16k_mono.wav.srt
-kaiwa20260601_16k_mono.wav.vtt
-```
-
-### 3. Run pyannote speaker diarization
-
-Use the activated venv Python.
+### 3. pyannote 話者分離
 
 ```bash
 source .venv/bin/activate
 
-python scripts/diarize_pyannote.py \
-  ~/pclouddrv/hosh/houshasenka/20260529/wav/kaiwa20260601_16k_mono.wav
+python scripts/diarize_pyannote.py OUTPUT_16k_mono.wav
 ```
 
-This creates:
+出力: `.wav.rttm`
 
-```text
-kaiwa20260601_16k_mono.wav.rttm
-```
-
-pyannote can be slow. Running this inside tmux is recommended.
-
-Detach from tmux:
-
-```text
-Ctrl-b d
-```
-
-Reattach:
+長時間かかるため、tmux 内で実行することを推奨する:
 
 ```bash
+# デタッチ
+Ctrl-b d
+
+# 再アタッチ
 tmux attach
 ```
 
-### 4. Merge Whisper SRT and pyannote RTTM
-
-First create a neutral merged transcript.
+### 4. SRT + RTTM の統合（中立版）
 
 ```bash
 python scripts/merge_srt_rttm.py \
-  --srt ~/pclouddrv/hosh/houshasenka/20260529/wav/kaiwa20260601_16k_mono.wav.srt \
-  --rttm ~/pclouddrv/hosh/houshasenka/20260529/wav/kaiwa20260601_16k_mono.wav.rttm \
-  --output ~/pclouddrv/hosh/houshasenka/20260529/wav/kaiwa20260601_merged.txt
+  --srt    OUTPUT_16k_mono.wav.srt \
+  --rttm   OUTPUT_16k_mono.wav.rttm \
+  --output merged.txt
 ```
 
-Check the result.
-
-```bash
-less ~/pclouddrv/hosh/houshasenka/20260529/wav/kaiwa20260601_merged.txt
-```
-
-### 5. Assign speaker names
-
-After checking the first few minutes, decide which pyannote speaker corresponds to which person.
-
-If:
-
-```text
-SPEAKER_00 = M職員
-SPEAKER_01 = K職員
-```
-
-run:
+### 5. 話者名の割り当て
 
 ```bash
 python scripts/merge_srt_rttm.py \
-  --srt ~/pclouddrv/hosh/houshasenka/20260529/wav/kaiwa20260601_16k_mono.wav.srt \
-  --rttm ~/pclouddrv/hosh/houshasenka/20260529/wav/kaiwa20260601_16k_mono.wav.rttm \
-  --output ~/pclouddrv/hosh/houshasenka/20260529/wav/kaiwa20260601_MK.txt \
+  --srt    OUTPUT_16k_mono.wav.srt \
+  --rttm   OUTPUT_16k_mono.wav.rttm \
+  --output named.txt \
   --speaker-00 M職員 \
   --speaker-01 K職員
 ```
 
-If reversed:
+---
 
-```bash
-python scripts/merge_srt_rttm.py \
-  --srt ~/pclouddrv/hosh/houshasenka/20260529/wav/kaiwa20260601_16k_mono.wav.srt \
-  --rttm ~/pclouddrv/hosh/houshasenka/20260529/wav/kaiwa20260601_16k_mono.wav.rttm \
-  --output ~/pclouddrv/hosh/houshasenka/20260529/wav/kaiwa20260601_MK.txt \
-  --speaker-00 K職員 \
-  --speaker-01 M職員
-```
+## Git 管理ポリシー
 
-## Full example
-
-This is the manual equivalent of `python scripts/run_pipeline.py INPUT.mp3` (steps 1-4
-chained together). For long recordings, prefer the
-[one-stop pipeline](#one-stop-pipeline-recommended-run_pipelinepy) instead.
-
-```bash
-cd /Volumes/macomini-data/eUsers/ryo/dev/git/mojiokoshi
-source .venv/bin/activate
-
-./scripts/prepare_audio.sh \
-  ~/pclouddrv/hosh/houshasenka/20260529/kaiwa20260601.mp3
-
-./scripts/transcribe_whisper.sh \
-  ~/pclouddrv/hosh/houshasenka/20260529/wav/kaiwa20260601_16k_mono.wav
-
-python scripts/diarize_pyannote.py \
-  ~/pclouddrv/hosh/houshasenka/20260529/wav/kaiwa20260601_16k_mono.wav
-
-python scripts/merge_srt_rttm.py \
-  --srt ~/pclouddrv/hosh/houshasenka/20260529/wav/kaiwa20260601_16k_mono.wav.srt \
-  --rttm ~/pclouddrv/hosh/houshasenka/20260529/wav/kaiwa20260601_16k_mono.wav.rttm \
-  --output ~/pclouddrv/hosh/houshasenka/20260529/wav/kaiwa20260601_merged.txt
-```
-
-## Git policy
-
-Do not track raw or generated files.
-
-Not tracked:
+管理しないファイル:
 
 ```text
-*.mp3
-*.m4a
-*.wav
-*.mp4
-*.mov
-*.txt
-*.srt
-*.vtt
-*.rttm
-*.diarization.tsv
-data/
-output/
-tmp/
-.venv/
-.env
-*.token
+*.mp3  *.m4a  *.wav  *.mp4  *.mov
+*.txt  *.srt  *.vtt  *.rttm  *.diarization.tsv
+data/  output/  tmp/  .venv/  .env  *.token
 ```
 
-Track only:
+管理するファイル:
 
 ```text
-README.md
-.gitignore
-scripts/*.sh
-scripts/*.py
+README.md  .gitignore  pyproject.toml  uv.lock
+scripts/*.sh  scripts/*.py
 ```
 
-Before committing, always check:
+コミット前に必ず確認する:
 
 ```bash
 git status
 git ls-files
 ```
-
-If sensitive or generated files appear, do not commit them.
-
-Commit scripts and README changes:
-
-```bash
-git add README.md .gitignore scripts
-git commit -m "Document transcription and diarization workflow"
-git push
-```
-
-

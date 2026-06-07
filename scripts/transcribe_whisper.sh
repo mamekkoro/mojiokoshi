@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODEL="${WHISPER_MODEL:-$HOME/ssd/models/whisper/ggml-large-v3-turbo.bin}"
+if [ -z "${WHISPER_MODEL:-}" ]; then
+  echo "Error: WHISPER_MODEL environment variable is not set." >&2
+  echo "Set it to the path of a whisper.cpp ggml model file, e.g.:" >&2
+  echo "  export WHISPER_MODEL=~/models/whisper/ggml-large-v3-turbo.bin" >&2
+  exit 1
+fi
+MODEL="$WHISPER_MODEL"
 
 if [ "$#" -lt 1 ]; then
   echo "Usage: $0 AUDIO_FILE [AUDIO_FILE ...]" >&2
