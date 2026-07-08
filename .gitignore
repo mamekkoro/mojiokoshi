@@ -36,3 +36,13 @@ __pycache__/
 .env
 *.token
 *.merged.txt
+
+# Generated transcripts
+*_merged.md
+*_named.md
+*_cleaned.md
+*_summary.md
+
+# llama.cpp / local model files
+*.gguf
+models/
